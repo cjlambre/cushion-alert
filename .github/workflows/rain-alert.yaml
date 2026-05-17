@@ -1,0 +1,30 @@
+name: Deck Cushion Rain Alert
+ 
+on:
+  schedule:
+    # 6:00 AM ET (10:00 UTC during EDT, May-Oct)
+    - cron: '0 10 * * *'
+    # 10:00 PM ET (02:00 UTC next day during EDT)
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # allows manual trigger from GitHub UI for testing
+ 
+jobs:
+  check-rain:
+    runs-on: ubuntu-latest
+ 
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+ 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+ 
+      - name: Run rain check
+        env:
+          GMAIL_SENDER: ${{ secrets.GMAIL_SENDER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_PRIMARY_EMAIL: ${{ secrets.ALERT_PRIMARY_EMAIL }}
+          ALERT_SECONDARY_EMAIL: ${{ secrets.ALERT_SECONDARY_EMAIL }}
+        run: python3 weather_check.py
