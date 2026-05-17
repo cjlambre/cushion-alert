@@ -52,7 +52,7 @@ PRIMARY_RECIPIENT   = os.environ.get("ALERT_PRIMARY_EMAIL", "")
 SECONDARY_RECIPIENT = os.environ.get("ALERT_SECONDARY_EMAIL", "")
 
 # Set INCLUDE_SECONDARY = True after your trial period
-INCLUDE_SECONDARY = False
+INCLUDE_SECONDARY = True
 
 # Gmail SMTP — credentials set via environment variables, never hardcoded
 GMAIL_SENDER   = os.environ.get("GMAIL_SENDER", "")
