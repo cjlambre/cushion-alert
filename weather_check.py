@@ -167,30 +167,34 @@ def get_future_windows():
     now_et    = now_utc + et_offset
     today_et  = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    if 5 <= now_et.hour < 9:
-        # Current: 6 AM run — next 3: 10 PM tonight, 6 AM tomorrow, 10 PM tomorrow
-        day1, day2, day3 = today_et, today_et + timedelta(days=1), today_et + timedelta(days=2)
-        runs = [
-            (day1.replace(hour=22), day2.replace(hour=6),  "10 PM tonight"),
-            (day2.replace(hour=6),  day2.replace(hour=22), "6 AM tomorrow"),
-            (day2.replace(hour=22), day3.replace(hour=6),  "10 PM tomorrow"),
-        ]
-    elif 21 <= now_et.hour <= 23:
-        # Current: 10 PM run — next 3: 6 AM tomorrow, 10 PM tomorrow, 6 AM in 2 days
-        day2, day3 = today_et + timedelta(days=1), today_et + timedelta(days=2)
-        runs = [
-            (day2.replace(hour=6),  day2.replace(hour=22), "6 AM tomorrow"),
-            (day2.replace(hour=22), day3.replace(hour=6),  "10 PM tomorrow"),
-            (day3.replace(hour=6),  day3.replace(hour=22), "6 AM in 2 days"),
-        ]
-    else:
-        return []
+    # Generate candidate run slots (6 AM and 10 PM ET) across the next few days,
+    # then take the first 3 that start after now — works regardless of current hour.
+    candidates = []
+    for day_offset in range(4):
+        day = today_et + timedelta(days=day_offset)
+        candidates.append((day.replace(hour=6),  day.replace(hour=22),                        "morning"))
+        candidates.append((day.replace(hour=22), (day + timedelta(days=1)).replace(hour=6),   "evening"))
+
+    future_runs = []
+    for start_et, end_et, period in candidates:
+        if start_et > now_et:
+            days_ahead = (start_et.date() - now_et.date()).days
+            if days_ahead == 0:
+                suffix = "tonight" if period == "evening" else "today"
+            elif days_ahead == 1:
+                suffix = "tomorrow"
+            else:
+                suffix = f"in {days_ahead} days"
+            time_str = "6 AM" if period == "morning" else "10 PM"
+            future_runs.append((start_et, end_et, f"{time_str} {suffix}"))
+        if len(future_runs) == 3:
+            break
 
     return [
         (s.replace(tzinfo=timezone.utc) - et_offset,
          e.replace(tzinfo=timezone.utc) - et_offset,
          lbl)
-        for s, e, lbl in runs
+        for s, e, lbl in future_runs
     ]
 
 
