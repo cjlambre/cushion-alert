@@ -12,8 +12,8 @@ Runs entirely in the cloud via GitHub Actions — no computer needs to be on.
 
 | Check time | Forecast window |
 |------------|-----------------|
-| 6:00 AM ET | Through 10:00 PM same day (~16 hrs) |
-| 10:00 PM ET | Through 6:00 AM next morning (~8 hrs) |
+| 6:00 AM ET | Through 8:00 PM same day (~14 hrs) |
+| 8:00 PM ET | Through 6:00 AM next morning (~10 hrs) |
 
 Alerts fire **only on a state change** — no repeated reminders when nothing changes:
 
@@ -113,7 +113,7 @@ No code changes needed.
 | No email received | Check spam folder; verify app password has no spaces |
 | `SMTPAuthenticationError` | App password is wrong or 2FA isn't enabled on Google account |
 | `urlopen error` | Open-Meteo is temporarily down (rare); will self-resolve |
-| Wrong forecast window | Cron expressions are in UTC — `0 10 * * *` = 6 AM ET, `0 2 * * *` = 10 PM ET |
+| Wrong forecast window | Cron expressions are in UTC — `0 10 * * *` = 6 AM ET, `0 0 * * *` = 8 PM ET |
 | Workflow not firing | Go to Actions tab and confirm the workflow is enabled |
 | Test run output | Click any run in the Actions tab to see the full script log |
 

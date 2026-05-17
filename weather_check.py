@@ -12,8 +12,8 @@ State is persisted in state.json and committed back to the repo by the
 GitHub Actions workflow after each run.
 
 Schedule:
-  6:00 AM check  → looks ahead through 10:00 PM (~16 hours)
-  10:00 PM check → looks ahead through 6:00 AM next day (~8 hours)
+  6:00 AM check → looks ahead through 8:00 PM (~14 hours)
+  8:00 PM check → looks ahead through 6:00 AM next day (~10 hours)
 
 Runs May–October only.
 Setup: See README.md
@@ -107,10 +107,10 @@ def get_check_window():
 
     # Morning check: 5–8 AM window (catches 6 AM cron with jitter)
     if 5 <= hour_et < 9:
-        window_end_et = now_et.replace(hour=22, minute=0, second=0, microsecond=0)
+        window_end_et = now_et.replace(hour=20, minute=0, second=0, microsecond=0)
         label = "today"
-    # Evening check: 9 PM–midnight window (catches 10 PM cron)
-    elif 21 <= hour_et <= 23:
+    # Evening check: 7–9 PM window (catches 8 PM cron)
+    elif 19 <= hour_et <= 21:
         tomorrow_et   = now_et + timedelta(days=1)
         window_end_et = tomorrow_et.replace(hour=6, minute=0, second=0, microsecond=0)
         label = "overnight"
@@ -173,7 +173,7 @@ def get_future_windows():
     for day_offset in range(4):
         day = today_et + timedelta(days=day_offset)
         candidates.append((day.replace(hour=6),  day.replace(hour=22),                        "morning"))
-        candidates.append((day.replace(hour=22), (day + timedelta(days=1)).replace(hour=6),   "evening"))
+        candidates.append((day.replace(hour=20), (day + timedelta(days=1)).replace(hour=6),   "evening"))
 
     future_runs = []
     for start_et, end_et, period in candidates:
