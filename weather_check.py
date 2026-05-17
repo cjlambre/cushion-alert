@@ -298,9 +298,12 @@ def main():
     is_raining = max_prob > RAIN_THRESHOLD
 
     # --- Build forward forecast block for email body ---
+    future_windows = get_future_windows()
+    print(f"Forward forecast windows ({len(future_windows)}): {[lbl for _, _, lbl in future_windows]}")
     future_lines = []
-    for win_start, win_end, win_label in get_future_windows():
+    for win_start, win_end, win_label in future_windows:
         max_p, peak_l = parse_rain_in_window(forecast, win_start, win_end)
+        print(f"  {win_label}: max={max_p}% peak={peak_l}")
         future_lines.append(f"  {win_label}: {format_window_forecast(max_p, peak_l)}")
     future_block = "\n".join(future_lines) or "  (unavailable)"
 
