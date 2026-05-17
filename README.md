@@ -105,7 +105,7 @@ cushion-alert/
 
 ---
 
-## Enabling alerts for your wife (after trial period)
+## Enabling alerts to secondary email (after trial period)
 
 Open `weather_check.py` and change this one line:
 
