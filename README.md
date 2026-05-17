@@ -1,7 +1,8 @@
 # 🛋️ Deck Cushion Rain Alert
 
 Automated twice-daily weather check for Mansfield, MA. Sends a Gmail alert
-when rain probability exceeds 10% in the upcoming window. Runs May–October only.
+when rain status **changes** — bring-in warnings and all-clear notifications.
+Runs May–October only.
 
 Runs entirely in the cloud via GitHub Actions — no computer needs to be on.
 
@@ -14,7 +15,19 @@ Runs entirely in the cloud via GitHub Actions — no computer needs to be on.
 | 6:00 AM ET | Through 10:00 PM same day (~16 hrs) |
 | 10:00 PM ET | Through 6:00 AM next morning (~8 hrs) |
 
-Alert is sent **only when rain is likely** — no all-clear spam.
+Alerts fire **only on a state change** — no repeated reminders when nothing changes:
+
+| Transition | Alert sent |
+|------------|------------|
+| Clear → Rain likely | "Bring in the cushions" |
+| Rain → Clear | "All clear — cushions can go back out" |
+| No change | Silent |
+
+Each alert email also includes a **3-run forward forecast** (the next three scheduled
+checks) so you can anticipate whether another alert is coming.
+
+Rain state is persisted in `state.json` and committed back to the repo by the
+workflow after every run.
 
 Weather data comes from [Open-Meteo](https://open-meteo.com/) — free, no API key needed.
 
@@ -51,7 +64,7 @@ These are encrypted by GitHub and never visible to anyone after saving.
 
 ### Step 3 — Push the workflow file
 
-Make sure `.github/workflows/rain-alert.yml` is committed and pushed.
+Make sure `.github/workflows/rain-alert.yaml` is committed and pushed.
 GitHub Actions will pick it up automatically and start running on schedule.
 
 ### Step 4 — Test manually
@@ -111,5 +124,6 @@ No code changes needed.
 | File | Purpose |
 |------|---------|
 | `weather_check.py` | Main script — weather fetch, threshold check, email send |
+| `state.json` | Persisted rain status — committed back to repo after each run |
 | `.github/workflows/rain-alert.yaml` | GitHub Actions workflow — schedule and runner config |
 | `README.md` | This file |
