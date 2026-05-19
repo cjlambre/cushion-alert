@@ -114,6 +114,7 @@ No code changes needed.
 | `SMTPAuthenticationError` | App password is wrong or 2FA isn't enabled on Google account |
 | `urlopen error` | Open-Meteo is temporarily down (rare); will self-resolve |
 | Wrong forecast window | Cron expressions are in UTC — `0 10 * * *` = 6 AM ET, `0 0 * * *` = 8 PM ET |
+| Run fired hours late | Normal — GitHub Actions free tier can delay scheduled jobs by up to several hours |
 | Workflow not firing | Go to Actions tab and confirm the workflow is enabled |
 | Test run output | Click any run in the Actions tab to see the full script log |
 
