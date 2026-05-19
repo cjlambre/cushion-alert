@@ -105,19 +105,15 @@ def get_check_window():
     now_et  = now_utc + et_offset
     hour_et = now_et.hour
 
-    # Morning check: 5–8 AM window (catches 6 AM cron with jitter)
-    if 5 <= hour_et < 9:
+    # Morning run territory: 5 AM–2 PM (absorbs multi-hour GitHub Actions delays on 6 AM cron)
+    if 5 <= hour_et < 14:
         window_end_et = now_et.replace(hour=20, minute=0, second=0, microsecond=0)
         label = "today"
-    # Evening check: 7–9 PM window (catches 8 PM cron)
-    elif 19 <= hour_et <= 21:
+    # Evening run territory: 2 PM–5 AM (absorbs delays on 8 PM cron, including past midnight)
+    else:
         tomorrow_et   = now_et + timedelta(days=1)
         window_end_et = tomorrow_et.replace(hour=6, minute=0, second=0, microsecond=0)
         label = "overnight"
-    else:
-        # Script called outside expected windows — default to next 8 hours
-        window_end_et = now_et + timedelta(hours=8)
-        label = "next 8 hours"
 
     window_start_utc = now_utc
     window_end_utc   = window_end_et - et_offset  # convert back to UTC
