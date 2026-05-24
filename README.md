@@ -10,10 +10,17 @@ Runs entirely in the cloud via GitHub Actions — no computer needs to be on.
 
 ## How it works
 
-| Check time | Forecast window |
-|------------|-----------------|
-| 6:00 AM ET | Through 8:00 PM same day (~14 hrs) |
-| 8:00 PM ET | Through 6:00 AM next morning (~10 hrs) |
+Runs every 3 hours, 3 AM–9 PM ET:
+
+| Run | ET | Forecast window checked |
+|-----|----|-------------------------|
+| 3 AM | (3 AM–9 AM territory) | Through 6:00 AM same morning |
+| 6 AM | (morning territory) | Through 8:00 PM same day |
+| 9 AM | (morning territory) | Through 8:00 PM same day |
+| 12 PM | (morning territory) | Through 8:00 PM same day |
+| 3 PM | (evening territory) | Through 6:00 AM next morning |
+| 6 PM | (evening territory) | Through 6:00 AM next morning |
+| 9 PM | (evening territory) | Through 6:00 AM next morning |
 
 Alerts fire **only on a state change** — no repeated reminders when nothing changes:
 
@@ -23,8 +30,9 @@ Alerts fire **only on a state change** — no repeated reminders when nothing ch
 | Rain → Clear | "All clear — cushions can go back out" |
 | No change | Silent |
 
-Each alert email also includes a **3-run forward forecast** (the next three scheduled
-checks) so you can anticipate whether another alert is coming.
+Each alert email leads with the **recommended action and deadline**, followed by a
+**24-hour hourly forecast** grouped into four bands (Morning, Midday, Evening, Overnight)
+so you can see the full picture at a glance. Hours above the rain threshold are marked ⚠️.
 
 Rain state is persisted in `state.json` and committed back to the repo by the
 workflow after every run.
@@ -113,7 +121,7 @@ No code changes needed.
 | No email received | Check spam folder; verify app password has no spaces |
 | `SMTPAuthenticationError` | App password is wrong or 2FA isn't enabled on Google account |
 | `urlopen error` | Open-Meteo is temporarily down (rare); will self-resolve |
-| Wrong forecast window | Cron expressions are in UTC — `0 10 * * *` = 6 AM ET, `0 0 * * *` = 8 PM ET |
+| Wrong forecast window | Cron expressions are in UTC — e.g. `0 10 * * *` = 6 AM ET (EDT = UTC-4) |
 | Run fired hours late | Normal — GitHub Actions free tier can delay scheduled jobs by up to several hours |
 | Workflow not firing | Go to Actions tab and confirm the workflow is enabled |
 | Test run output | Click any run in the Actions tab to see the full script log |

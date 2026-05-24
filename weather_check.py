@@ -12,10 +12,7 @@ State is persisted in state.json and committed back to the repo by the
 GitHub Actions workflow after each run.
 
 Schedule:
-  6:00 AM check → looks ahead through 8:00 PM (~14 hours)
-  8:00 PM check → looks ahead through 6:00 AM next day (~10 hours)
-
-Runs May–October only.
+  Every 3 hours, 3 AM–9 PM ET. Runs May–October only.
 Setup: See README.md
 """
 
@@ -27,6 +24,7 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from itertools import groupby
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -64,23 +62,16 @@ GMAIL_APP_PASS = os.environ.get("GMAIL_APP_PASSWORD", "")
 # ---------------------------------------------------------------------------
 
 def load_state():
-    """
-    Load previous run state from state.json.
-    Returns dict with 'rain_alert_active' (bool) and 'last_run' (str).
-    Defaults to clear/unknown on first run.
-    """
     if STATE_FILE.exists():
         try:
             with open(STATE_FILE) as f:
                 return json.load(f)
         except Exception:
             pass
-    # First run or corrupted file — default to clear
     return {"rain_alert_active": False, "last_run": None}
 
 
 def save_state(rain_alert_active):
-    """Save current run state to state.json."""
     state = {
         "rain_alert_active": rain_alert_active,
         "last_run": datetime.now(timezone.utc).isoformat()
@@ -97,26 +88,25 @@ def save_state(rain_alert_active):
 def get_check_window():
     """
     Return (window_start, window_end, label) in UTC based on current local hour.
-    6 AM check  → now through 10 PM local
-    10 PM check → now through 6 AM next day local
+    Morning run territory (5 AM–2 PM ET): check through 8 PM same day.
+    Evening run territory (2 PM–5 AM ET): check through 6 AM next day.
+    Wide bands absorb multi-hour GitHub Actions scheduling delays.
     """
     et_offset = timedelta(hours=-4)  # EDT (May–Oct is always EDT, not EST)
     now_utc = datetime.now(timezone.utc)
     now_et  = now_utc + et_offset
     hour_et = now_et.hour
 
-    # Morning run territory: 5 AM–2 PM (absorbs multi-hour GitHub Actions delays on 6 AM cron)
     if 5 <= hour_et < 14:
         window_end_et = now_et.replace(hour=20, minute=0, second=0, microsecond=0)
         label = "today"
-    # Evening run territory: 2 PM–5 AM (absorbs delays on 8 PM cron, including past midnight)
     else:
         tomorrow_et   = now_et + timedelta(days=1)
         window_end_et = tomorrow_et.replace(hour=6, minute=0, second=0, microsecond=0)
         label = "overnight"
 
     window_start_utc = now_utc
-    window_end_utc   = window_end_et - et_offset  # convert back to UTC
+    window_end_utc   = window_end_et - et_offset
     return window_start_utc, window_end_utc, label
 
 
@@ -135,102 +125,93 @@ def fetch_forecast():
 
 def parse_rain_in_window(forecast, window_start, window_end):
     """
-    Return (max_probability, peak_hour_label) for hours within the window.
+    Return (max_prob, peak_label, first_label) for hours in the window.
+    first_label is the earliest hour exceeding RAIN_THRESHOLD, or None.
     """
     times = forecast["hourly"]["time"]
     probs = forecast["hourly"]["precipitation_probability"]
 
-    max_prob   = 0
-    peak_label = None
-    et_offset  = timedelta(hours=-4)  # EDT
+    max_prob    = 0
+    peak_label  = None
+    first_label = None
+    et_offset   = timedelta(hours=-4)
 
     for time_str, prob in zip(times, probs):
         local_dt = datetime.fromisoformat(time_str)
         utc_dt   = local_dt.replace(tzinfo=timezone.utc) - et_offset
 
         if window_start <= utc_dt <= window_end:
+            if prob > RAIN_THRESHOLD and first_label is None:
+                first_label = local_dt.strftime("%-I %p")
             if prob > max_prob:
                 max_prob   = prob
-                peak_label = local_dt.strftime("%-I %p")  # e.g. "3 PM"
+                peak_label = local_dt.strftime("%-I %p")
 
-    return max_prob, peak_label
-
-
-def get_future_windows():
-    """Return (start_utc, end_utc, label) for the next 3 scheduled runs after the current one."""
-    et_offset = timedelta(hours=-4)  # EDT
-    now_utc   = datetime.now(timezone.utc)
-    now_et    = now_utc + et_offset
-    today_et  = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    # Generate candidate run slots (6 AM and 10 PM ET) across the next few days,
-    # then take the first 3 that start after now — works regardless of current hour.
-    candidates = []
-    for day_offset in range(4):
-        day = today_et + timedelta(days=day_offset)
-        candidates.append((day.replace(hour=6),  day.replace(hour=22),                        "morning"))
-        candidates.append((day.replace(hour=20), (day + timedelta(days=1)).replace(hour=6),   "evening"))
-
-    future_runs = []
-    for start_et, end_et, period in candidates:
-        if start_et > now_et:
-            days_ahead = (start_et.date() - now_et.date()).days
-            if days_ahead == 0:
-                suffix = "tonight" if period == "evening" else "today"
-            elif days_ahead == 1:
-                suffix = "tomorrow"
-            else:
-                suffix = f"in {days_ahead} days"
-            time_str = "6 AM" if period == "morning" else "10 PM"
-            future_runs.append((start_et, end_et, f"{time_str} {suffix}"))
-        if len(future_runs) == 3:
-            break
-
-    return [
-        (s.replace(tzinfo=timezone.utc) - et_offset,
-         e.replace(tzinfo=timezone.utc) - et_offset,
-         lbl)
-        for s, e, lbl in future_runs
-    ]
+    return max_prob, peak_label, first_label
 
 
-def format_window_forecast(max_prob, peak_label):
-    """Format a single future window as a human-readable status string."""
-    if max_prob > RAIN_THRESHOLD:
-        s = f"⚠️  Rain likely — {max_prob}%"
-        if peak_label:
-            s += f" peak around {peak_label}"
-        return s
-    return f"Clear — max {max_prob}%"
+def build_hourly_block(forecast, start_utc):
+    """
+    Return a banded 24-hour hourly forecast table as a plain-text string.
+    Bands: Morning (6–11 AM), Midday (12–5 PM), Evening (6–11 PM), Overnight (12–5 AM).
+    Hours above RAIN_THRESHOLD are prefixed with ⚠️.
+    Bands appear in chronological order; a band split across midnight shows as two rows.
+    """
+    et_offset = timedelta(hours=-4)
+    end_utc   = start_utc + timedelta(hours=24)
+    times     = forecast["hourly"]["time"]
+    probs     = forecast["hourly"]["precipitation_probability"]
+
+    HOUR_TO_BAND = {}
+    for h in range(6,  12): HOUR_TO_BAND[h] = "Morning"
+    for h in range(12, 18): HOUR_TO_BAND[h] = "Midday"
+    for h in range(18, 24): HOUR_TO_BAND[h] = "Evening"
+    for h in range(0,  6):  HOUR_TO_BAND[h] = "Overnight"
+
+    entries = []
+    for time_str, prob in zip(times, probs):
+        local_dt = datetime.fromisoformat(time_str)
+        utc_dt   = local_dt.replace(tzinfo=timezone.utc) - et_offset
+        if start_utc <= utc_dt < end_utc:
+            entries.append((local_dt.hour, local_dt.strftime("%-I%p"), prob))
+
+    lines = []
+    for band, group in groupby(entries, key=lambda e: HOUR_TO_BAND[e[0]]):
+        parts = []
+        for _, lbl, prob in group:
+            marker = "⚠️" if prob > RAIN_THRESHOLD else ""
+            parts.append(f"{marker}{lbl}:{prob}%")
+        lines.append(f"{band:<9} {'  '.join(parts)}")
+
+    return "\n".join(lines) or "  (unavailable)"
 
 
 # ---------------------------------------------------------------------------
 # EMAIL
 # ---------------------------------------------------------------------------
 
-def build_rain_email(max_prob, peak_label, window_label, future_block):
+def build_rain_email(max_prob, peak_label, first_label, window_label, hourly_block):
     """Compose rain warning email."""
+    action  = f"Bring cushions in before {first_label}" if first_label else "Bring cushions in soon"
     subject = "🌧️ Deck cushion alert — bring them in!"
     body = (
-        f"Rain alert for Mansfield, MA\n\n"
-        f"Forecast window: {window_label}\n"
-        f"Peak rain probability: {max_prob}% (around {peak_label})\n\n"
-        f"Recommended action: bring in the deck cushions before it rains.\n\n"
-        f"Forecast ahead:\n{future_block}\n\n"
+        f"Rain alert for Mansfield, MA — {window_label}\n\n"
+        f"Action: {action}\n"
+        f"Peak:   {max_prob}% around {peak_label}\n\n"
+        f"24-hour forecast:\n{hourly_block}\n\n"
         f"— Your automated cushion watchdog 🛋️"
     )
     return subject, body
 
 
-def build_clear_email(window_label, future_block):
+def build_clear_email(max_prob, window_label, hourly_block):
     """Compose all-clear email."""
     subject = "✅ Deck cushions — all clear!"
     body = (
-        f"Good news for Mansfield, MA\n\n"
-        f"Forecast window: {window_label}\n"
-        f"Rain probability has dropped below {RAIN_THRESHOLD}%.\n\n"
-        f"The cushions can go back out.\n\n"
-        f"Forecast ahead:\n{future_block}\n\n"
+        f"All clear for Mansfield, MA — {window_label}\n\n"
+        f"Action: Cushions can go back out\n"
+        f"Rain probability: Under {RAIN_THRESHOLD}% (max {max_prob}%)\n\n"
+        f"24-hour forecast:\n{hourly_block}\n\n"
         f"— Your automated cushion watchdog 🛋️"
     )
     return subject, body
@@ -286,22 +267,18 @@ def main():
         sys.exit(1)
 
     # --- Parse relevant hours ---
-    max_prob, peak_label = parse_rain_in_window(forecast, window_start, window_end)
+    max_prob, peak_label, first_label = parse_rain_in_window(forecast, window_start, window_end)
     print(f"Peak precipitation probability in window: {max_prob}%"
           + (f" (around {peak_label})" if peak_label else ""))
+    if first_label:
+        print(f"First rainy hour: {first_label}")
 
     # --- Determine current state ---
     is_raining = max_prob > RAIN_THRESHOLD
 
-    # --- Build forward forecast block for email body ---
-    future_windows = get_future_windows()
-    print(f"Forward forecast windows ({len(future_windows)}): {[lbl for _, _, lbl in future_windows]}")
-    future_lines = []
-    for win_start, win_end, win_label in future_windows:
-        max_p, peak_l = parse_rain_in_window(forecast, win_start, win_end)
-        print(f"  {win_label}: max={max_p}% peak={peak_l}")
-        future_lines.append(f"  {win_label}: {format_window_forecast(max_p, peak_l)}")
-    future_block = "\n".join(future_lines) or "  (unavailable)"
+    # --- Build 24-hour hourly forecast block ---
+    hourly_block = build_hourly_block(forecast, window_start)
+    print(f"Hourly block ({len(hourly_block.splitlines())} rows):\n{hourly_block}")
 
     # --- Build recipient list ---
     recipients = [PRIMARY_RECIPIENT]
@@ -311,7 +288,7 @@ def main():
     # --- Notify only on state change ---
     if is_raining and not was_raining:
         print("State change: Clear → Rain. Sending bring-in alert.")
-        subject, body = build_rain_email(max_prob, peak_label, window_label, future_block)
+        subject, body = build_rain_email(max_prob, peak_label, first_label, window_label, hourly_block)
         try:
             send_email(subject, body, recipients)
             print(f"Alert sent to: {', '.join(recipients)}")
@@ -321,7 +298,7 @@ def main():
 
     elif not is_raining and was_raining:
         print("State change: Rain → Clear. Sending all-clear.")
-        subject, body = build_clear_email(window_label, future_block)
+        subject, body = build_clear_email(max_prob, window_label, hourly_block)
         try:
             send_email(subject, body, recipients)
             print(f"All-clear sent to: {', '.join(recipients)}")
