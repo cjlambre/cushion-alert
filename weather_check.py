@@ -57,7 +57,7 @@ GMAIL_SENDER   = os.environ.get("GMAIL_SENDER", "")
 GMAIL_APP_PASS = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 # Set True to receive an email even when rain status has not changed (debug)
-NOTIFY_ON_NO_CHANGE = False
+NOTIFY_ON_NO_CHANGE = True
 
 # Forecast hour → band name
 _HOUR_TO_BAND = {
