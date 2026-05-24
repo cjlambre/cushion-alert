@@ -30,9 +30,10 @@ Alerts fire **only on a state change** — no repeated reminders when nothing ch
 | Rain → Clear | "All clear — cushions can go back out" |
 | No change | Silent |
 
-Each alert email leads with the **recommended action and deadline**, followed by a
-**24-hour hourly forecast** grouped into four bands (Morning, Midday, Evening, Overnight)
-so you can see the full picture at a glance. Hours above the rain threshold are marked ⚠️.
+Each alert email leads with the **recommended action and deadline**, followed by an
+**HTML 24-hour hourly forecast** grouped into four bands (Morning, Afternoon, Evening,
+Overnight) so you can see the full picture at a glance. Hours above the rain threshold
+are highlighted ⚠️.
 
 Rain state is persisted in `state.json` and committed back to the repo by the
 workflow after every run.
@@ -111,6 +112,18 @@ If you ever need to generate a new app password:
    → click `GMAIL_APP_PASSWORD` → **Update**
 
 No code changes needed.
+
+---
+
+## Debugging
+
+To receive an email on every run regardless of state change, open `weather_check.py` and set:
+
+```python
+NOTIFY_ON_NO_CHANGE = True
+```
+
+Revert to `False` when done — leaving it `True` in production sends an email 7× per day.
 
 ---
 

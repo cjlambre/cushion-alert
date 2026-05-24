@@ -56,6 +56,17 @@ INCLUDE_SECONDARY = True
 GMAIL_SENDER   = os.environ.get("GMAIL_SENDER", "")
 GMAIL_APP_PASS = os.environ.get("GMAIL_APP_PASSWORD", "")
 
+# Set True to receive an email even when rain status has not changed (debug)
+NOTIFY_ON_NO_CHANGE = False
+
+# Forecast hour → band name
+_HOUR_TO_BAND = {
+    **{h: "Morning"   for h in range(6,  12)},
+    **{h: "Afternoon" for h in range(12, 18)},
+    **{h: "Evening"   for h in range(18, 24)},
+    **{h: "Overnight" for h in range(0,  6)},
+}
+
 
 # ---------------------------------------------------------------------------
 # STATE MANAGEMENT
@@ -150,23 +161,16 @@ def parse_rain_in_window(forecast, window_start, window_end):
     return max_prob, peak_label, first_label
 
 
-def build_hourly_block(forecast, start_utc):
+def get_hourly_data(forecast, start_utc):
     """
-    Return a banded 24-hour hourly forecast table as a plain-text string.
-    Bands: Morning (6–11 AM), Midday (12–5 PM), Evening (6–11 PM), Overnight (12–5 AM).
-    Hours above RAIN_THRESHOLD are prefixed with ⚠️.
-    Bands appear in chronological order; a band split across midnight shows as two rows.
+    Return list of (band_name, [(hour_label, prob), ...]) for the 24 hours starting
+    at start_utc, in chronological order. A band split across midnight appears as
+    two separate entries (e.g. Evening at start + Evening at end of window).
     """
     et_offset = timedelta(hours=-4)
     end_utc   = start_utc + timedelta(hours=24)
     times     = forecast["hourly"]["time"]
     probs     = forecast["hourly"]["precipitation_probability"]
-
-    HOUR_TO_BAND = {}
-    for h in range(6,  12): HOUR_TO_BAND[h] = "Morning"
-    for h in range(12, 18): HOUR_TO_BAND[h] = "Midday"
-    for h in range(18, 24): HOUR_TO_BAND[h] = "Evening"
-    for h in range(0,  6):  HOUR_TO_BAND[h] = "Overnight"
 
     entries = []
     for time_str, prob in zip(times, probs):
@@ -175,55 +179,149 @@ def build_hourly_block(forecast, start_utc):
         if start_utc <= utc_dt < end_utc:
             entries.append((local_dt.hour, local_dt.strftime("%-I%p"), prob))
 
+    result = []
+    for band, group in groupby(entries, key=lambda e: _HOUR_TO_BAND[e[0]]):
+        result.append((band, [(lbl, prob) for _, lbl, prob in group]))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# FORMATTING
+# ---------------------------------------------------------------------------
+
+def format_hourly_text(hourly_data):
+    """Return the banded hourly forecast as plain text (email fallback)."""
     lines = []
-    for band, group in groupby(entries, key=lambda e: HOUR_TO_BAND[e[0]]):
+    for band, hours in hourly_data:
         parts = []
-        for _, lbl, prob in group:
+        for lbl, prob in hours:
             marker = "⚠️" if prob > RAIN_THRESHOLD else ""
             parts.append(f"{marker}{lbl}:{prob}%")
         lines.append(f"{band:<9} {'  '.join(parts)}")
-
     return "\n".join(lines) or "  (unavailable)"
+
+
+def format_hourly_html(hourly_data):
+    """Return the banded hourly forecast as an HTML table."""
+    TD_LABEL  = 'style="padding:4px 8px;text-align:center;color:#666;font-size:12px;"'
+    TD_CELL   = 'style="padding:5px 8px;text-align:center;"'
+    TD_RAIN   = 'style="padding:5px 8px;text-align:center;background:#ffe0b2;font-weight:600;"'
+    TD_SPACER = 'style="background:#f2f2f2;"'
+
+    rows = []
+    for i, (band, hours) in enumerate(hourly_data):
+        sep     = "border-top:2px solid #ddd;" if i > 0 else ""
+        td_band = (
+            f'style="padding:5px 10px 5px 8px;font-weight:600;font-size:11px;'
+            f'color:#555;text-transform:uppercase;letter-spacing:.5px;'
+            f'background:#f2f2f2;{sep}"'
+        )
+        labels = "".join(f'<td {TD_LABEL}>{lbl}</td>' for lbl, _ in hours)
+        rows.append(f'  <tr><td {td_band}>{band}</td>{labels}</tr>')
+
+        values = []
+        for _, prob in hours:
+            if prob > RAIN_THRESHOLD:
+                values.append(f'<td {TD_RAIN}>⚠️ {prob}%</td>')
+            else:
+                values.append(f'<td {TD_CELL}>{prob}%</td>')
+        rows.append(f'  <tr><td {TD_SPACER}></td>{"".join(values)}</tr>')
+
+    return (
+        '<table cellspacing="0" cellpadding="0" '
+        'style="border-collapse:collapse;font-size:14px;font-family:inherit;width:100%;">\n'
+        + "\n".join(rows) + "\n</table>"
+    )
 
 
 # ---------------------------------------------------------------------------
 # EMAIL
 # ---------------------------------------------------------------------------
 
-def build_rain_email(max_prob, peak_label, first_label, window_label, hourly_block):
-    """Compose rain warning email."""
+_HTML_TMPL = """\
+<!DOCTYPE html>
+<html>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;font-size:15px;color:#333;max-width:480px;padding:16px;margin:0;">
+<p style="margin:0 0 14px;font-size:16px;font-weight:600;">{title}</p>
+<p style="margin:0 0 16px;line-height:1.7;">{details}</p>
+<p style="margin:0 0 8px;font-weight:600;font-size:13px;">24-hour forecast</p>
+{table}
+<p style="color:#aaa;font-size:13px;margin-top:18px;">&mdash; Your automated cushion watchdog 🛋️</p>
+</body>
+</html>"""
+
+
+def _html_email(title, detail_pairs, table_html):
+    """Assemble a complete HTML email body from structured parts."""
+    details = "<br>\n".join(f"<strong>{k}:</strong> {v}" for k, v in detail_pairs)
+    return _HTML_TMPL.format(title=title, details=details, table=table_html)
+
+
+def build_rain_email(max_prob, peak_label, first_label, window_label, hourly_text, hourly_html):
+    """Compose rain warning email, returning (subject, plain_body, html_body)."""
     action  = f"Bring cushions in before {first_label}" if first_label else "Bring cushions in soon"
     subject = "🌧️ Deck cushion alert — bring them in!"
-    body = (
+    plain = (
         f"Rain alert for Mansfield, MA — {window_label}\n\n"
         f"Action: {action}\n"
         f"Peak:   {max_prob}% around {peak_label}\n\n"
-        f"24-hour forecast:\n{hourly_block}\n\n"
+        f"24-hour forecast:\n{hourly_text}\n\n"
         f"— Your automated cushion watchdog 🛋️"
     )
-    return subject, body
+    html = _html_email(
+        f"Rain alert — Mansfield, MA — {window_label}",
+        [("Action", action), ("Peak", f"{max_prob}% around {peak_label}")],
+        hourly_html,
+    )
+    return subject, plain, html
 
 
-def build_clear_email(max_prob, window_label, hourly_block):
-    """Compose all-clear email."""
+def build_clear_email(max_prob, window_label, hourly_text, hourly_html):
+    """Compose all-clear email, returning (subject, plain_body, html_body)."""
     subject = "✅ Deck cushions — all clear!"
-    body = (
+    plain = (
         f"All clear for Mansfield, MA — {window_label}\n\n"
         f"Action: Cushions can go back out\n"
         f"Rain probability: Under {RAIN_THRESHOLD}% (max {max_prob}%)\n\n"
-        f"24-hour forecast:\n{hourly_block}\n\n"
+        f"24-hour forecast:\n{hourly_text}\n\n"
         f"— Your automated cushion watchdog 🛋️"
     )
-    return subject, body
+    html = _html_email(
+        f"All clear — Mansfield, MA — {window_label}",
+        [("Action", "Cushions can go back out"),
+         ("Rain probability", f"Under {RAIN_THRESHOLD}% (max {max_prob}%)")],
+        hourly_html,
+    )
+    return subject, plain, html
 
 
-def send_email(subject, body, recipients):
-    """Send via Gmail SMTP using an app password."""
+def build_debug_email(max_prob, is_raining, window_label, hourly_text, hourly_html):
+    """Compose no-change debug email, returning (subject, plain_body, html_body)."""
+    status  = "Rain continuing" if is_raining else "Still clear"
+    subject = f"🔔 No change — {status.lower()}"
+    plain = (
+        f"Status check for Mansfield, MA — {window_label}\n\n"
+        f"Status: No change ({status})\n"
+        f"Peak:   {max_prob}% in window\n\n"
+        f"24-hour forecast:\n{hourly_text}\n\n"
+        f"— Your automated cushion watchdog 🛋️"
+    )
+    html = _html_email(
+        f"Status check — Mansfield, MA — {window_label}",
+        [("Status", f"No change ({status})"), ("Peak", f"{max_prob}% in window")],
+        hourly_html,
+    )
+    return subject, plain, html
+
+
+def send_email(subject, plain_body, html_body, recipients):
+    """Send a multipart/alternative email with plain-text and HTML parts."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = GMAIL_SENDER
     msg["To"]      = ", ".join(recipients)
-    msg.attach(MIMEText(body, "plain"))
+    msg.attach(MIMEText(plain_body, "plain"))
+    msg.attach(MIMEText(html_body,  "html"))   # HTML last = preferred by email clients
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(GMAIL_SENDER, GMAIL_APP_PASS)
@@ -276,21 +374,25 @@ def main():
     # --- Determine current state ---
     is_raining = max_prob > RAIN_THRESHOLD
 
-    # --- Build 24-hour hourly forecast block ---
-    hourly_block = build_hourly_block(forecast, window_start)
-    print(f"Hourly block ({len(hourly_block.splitlines())} rows):\n{hourly_block}")
+    # --- Build hourly forecast (text + HTML) ---
+    hourly_data = get_hourly_data(forecast, window_start)
+    hourly_text = format_hourly_text(hourly_data)
+    hourly_html = format_hourly_html(hourly_data)
+    print(f"Hourly block ({len(hourly_data)} bands):\n{hourly_text}")
 
     # --- Build recipient list ---
     recipients = [PRIMARY_RECIPIENT]
     if INCLUDE_SECONDARY and SECONDARY_RECIPIENT:
         recipients.append(SECONDARY_RECIPIENT)
 
-    # --- Notify only on state change ---
+    # --- Notify only on state change (or always if NOTIFY_ON_NO_CHANGE) ---
     if is_raining and not was_raining:
         print("State change: Clear → Rain. Sending bring-in alert.")
-        subject, body = build_rain_email(max_prob, peak_label, first_label, window_label, hourly_block)
+        subject, plain, html = build_rain_email(
+            max_prob, peak_label, first_label, window_label, hourly_text, hourly_html
+        )
         try:
-            send_email(subject, body, recipients)
+            send_email(subject, plain, html, recipients)
             print(f"Alert sent to: {', '.join(recipients)}")
         except Exception as e:
             print(f"ERROR: Could not send email: {e}")
@@ -298,9 +400,11 @@ def main():
 
     elif not is_raining and was_raining:
         print("State change: Rain → Clear. Sending all-clear.")
-        subject, body = build_clear_email(max_prob, window_label, hourly_block)
+        subject, plain, html = build_clear_email(
+            max_prob, window_label, hourly_text, hourly_html
+        )
         try:
-            send_email(subject, body, recipients)
+            send_email(subject, plain, html, recipients)
             print(f"All-clear sent to: {', '.join(recipients)}")
         except Exception as e:
             print(f"ERROR: Could not send email: {e}")
@@ -309,6 +413,15 @@ def main():
     else:
         status = "Rain continuing" if is_raining else "Still clear"
         print(f"No state change ({status}). No email sent.")
+        if NOTIFY_ON_NO_CHANGE:
+            subject, plain, html = build_debug_email(
+                max_prob, is_raining, window_label, hourly_text, hourly_html
+            )
+            try:
+                send_email(subject, plain, html, recipients)
+                print(f"Debug email sent to: {', '.join(recipients)}")
+            except Exception as e:
+                print(f"ERROR: Could not send debug email: {e}")
 
     # --- Save new state ---
     save_state(is_raining)
